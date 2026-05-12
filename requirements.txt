@@ -1,0 +1,5 @@
+inventree
+pandas
+click
+python-dotenv
+tabulate
