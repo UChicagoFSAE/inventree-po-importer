@@ -1,9 +1,16 @@
 import click
+import pandas as pd
 from tabulate import tabulate
 from config import get_api
 from parser import parse_csv
 from resolver import Resolver
 from stock_manager import StockManager
+from mapping_utils import (
+    get_saved_mapping,
+    save_mapping,
+    detect_columns,
+    REQUIRED_FIELDS,
+)
 
 
 @click.command()
@@ -30,8 +37,66 @@ def importer(input_csv, supplier_id, location_id):
         click.secho(f"Error: Could not connect to InvenTree API: {e}", fg="red")
         return
 
+    # Resolve CSV mapping
+    mapping = get_saved_mapping(supplier_id)
+    if not mapping:
+        click.echo("No saved mapping found for this supplier. Detecting columns...")
+        mapping = detect_columns(input_csv)
+
+    # Check for missing required fields
+    missing = [f for f in REQUIRED_FIELDS if not mapping.get(f)]
+    csv_headers = pd.read_csv(input_csv, nrows=0).columns.tolist()
+
+    def prompt_mapping(current_mapping):
+        new_mapping = current_mapping.copy()
+        click.echo("\n--- CSV Column Mapping ---")
+        table = []
+        for field, col in new_mapping.items():
+            req = "*" if field in REQUIRED_FIELDS else ""
+            table.append([f"{field}{req}", col or click.style("NOT MAPPED", fg="red")])
+        click.echo(tabulate(table, headers=["Field", "CSV Column"], tablefmt="simple"))
+
+        if click.confirm("\nEdit this mapping?", default=len(missing) > 0):
+            for field in new_mapping.keys():
+                req = "*" if field in REQUIRED_FIELDS else ""
+                current = new_mapping.get(field)
+                click.echo(f"\nTarget Field: {click.style(field + req, bold=True)}")
+                click.echo(f"Current Mapping: {current or 'None'}")
+
+                if click.confirm(
+                    f"Change mapping for '{field}'?",
+                    default=not current and field in REQUIRED_FIELDS,
+                ):
+                    for idx, h in enumerate(csv_headers):
+                        click.echo(f"  [{idx+1}] {h}")
+                    choice = click.prompt(
+                        "Select column [1-N] or [0] to leave unmapped",
+                        type=int,
+                        default=0,
+                    )
+                    if 0 < choice <= len(csv_headers):
+                        new_mapping[field] = csv_headers[choice - 1]
+                    else:
+                        new_mapping[field] = None
+            return new_mapping, True
+        return new_mapping, False
+
+    mapping, modified = prompt_mapping(mapping)
+
+    # Final check
+    missing = [f for f in REQUIRED_FIELDS if not mapping.get(f)]
+    if missing:
+        click.secho(
+            f"Error: Required fields not mapped: {', '.join(missing)}", fg="red"
+        )
+        return
+
+    if modified or not get_saved_mapping(supplier_id):
+        if click.confirm("Save this mapping for future use?"):
+            save_mapping(supplier_id, mapping)
+
     click.echo(f"Parsing {input_csv}...")
-    items = parse_csv(input_csv)
+    items = parse_csv(input_csv, mapping)
     click.echo(f"Found {len(items)} items in CSV.")
 
     click.echo(f"Reconciling items (Supplier ID: {supplier_id})...")

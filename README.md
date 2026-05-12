@@ -4,6 +4,7 @@ A command-line tool to bridge the gap between supplier invoice CSVs (like DigiKe
 
 ## Features
 
+- **Generic CSV Mapping**: Automatically detects columns for various suppliers and allows manual mapping adjustment with persistent configuration (saved per supplier ID).
 - **Automated Reconciliation**: Matches parts using Supplier SKU and Manufacturer Part Number (MPN).
 - **Interactive Resolution**: If a part isn't found, you can search InvenTree, manually link a known ID, or create a new part on-the-fly.
 - **On-the-fly Creation**: Create missing Parts, Manufacturers, and their associated links (ManufacturerParts/SupplierParts) without leaving the CLI.
@@ -54,4 +55,6 @@ python3 cli.py --location-id 10 --supplier-id 5 ./examples/invoice.csv
 
 ## Supported Suppliers
 
-Currently, the tool is tuned for **DigiKey** invoice CSVs. Support for Mouser, LCSC, and others is planned.
+The tool supports **generic CSV mapping**, meaning it can work with any supplier (DigiKey, Mouser, LCSC, etc.) by mapping their specific column headers to the internal `LineItem` format. 
+
+Mappings are saved to `supplier_mappings.json` and reused automatically based on the `--supplier-id` you provide.

@@ -3,47 +3,55 @@ from typing import List
 from models import LineItem
 
 
-def parse_csv(filepath: str) -> List[LineItem]:
+def parse_csv(filepath: str, mapping: dict) -> List[LineItem]:
     # Read CSV
-    # DigiKey CSVs often have extra rows at the end (like subtotal)
     df = pd.read_csv(filepath)
 
-    # Define mapping (can be expanded later for other suppliers)
-    mapping = {  # noqa: F841
-        "Index": "index",
-        "DigiKey Part #": "sku",
-        "Manufacturer Part Number": "mpn",
-        "Manufacturer": "manufacturer",
-        "Quantity": "quantity",
-        "Unit Price": "unit_price",
-        "Description": "description",
-        "Customer Reference": "customer_reference",
-    }
-
     # Filter to only rows that have the core data (ignore Subtotal row)
-    # The subtotal row usually has NaN for 'Index' or 'DigiKey Part #'
-    df = df.dropna(subset=["Index", "DigiKey Part #", "Manufacturer Part Number"])
+    # Use mapped columns for index, sku, and mpn if available for filtering
+    subset = [mapping[f] for f in ["index", "sku", "mpn"] if mapping.get(f)]
+    if subset:
+        df = df.dropna(subset=subset)
 
     line_items = []
     for _, row in df.iterrows():
         try:
+            # Helper to get value from mapped column
+            def get_val(field):
+                col = mapping.get(field)
+                if col and col in row and pd.notna(row[col]):
+                    return row[col]
+                return None
+
+            unit_price_raw = str(get_val("unit_price") or "0")
+            # Remove common currency symbols and thousands separators
+            unit_price_clean = (
+                unit_price_raw.replace("$", "")
+                .replace("£", "")
+                .replace("€", "")
+                .replace(",", "")
+                .strip()
+            )
+
             item = LineItem(
-                index=int(row["Index"]),
-                sku=str(row["DigiKey Part #"]).strip(),
-                mpn=str(row["Manufacturer Part Number"]).strip(),
-                manufacturer=str(row["Manufacturer"]).strip()
-                if "Manufacturer" in row and pd.notna(row["Manufacturer"])
+                index=int(get_val("index")),
+                sku=str(get_val("sku")).strip(),
+                mpn=str(get_val("mpn")).strip(),
+                manufacturer=str(get_val("manufacturer")).strip()
+                if get_val("manufacturer")
                 else None,
-                quantity=float(row["Quantity"]),
-                unit_price=float(str(row["Unit Price"]).replace("$", "").strip()),
-                description=str(row["Description"]).strip(),
-                customer_reference=str(row["Customer Reference"]).strip()
-                if pd.notna(row["Customer Reference"])
+                quantity=float(get_val("quantity")),
+                unit_price=float(unit_price_clean),
+                description=str(get_val("description")).strip(),
+                customer_reference=str(get_val("customer_reference")).strip()
+                if get_val("customer_reference")
                 else None,
             )
             line_items.append(item)
         except (ValueError, TypeError) as e:
-            print(f"Warning: Skipping row {row.get('Index')} due to parsing error: {e}")
+            idx_col = mapping.get("index")
+            idx_val = row.get(idx_col) if idx_col else "unknown"
+            print(f"Warning: Skipping row {idx_val} due to parsing error: {e}")
 
     return line_items
 

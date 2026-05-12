@@ -224,3 +224,6 @@ examples/DK*.csv
 
 # Handoff Documents
 .handoffs/
+
+# Local Settings
+supplier_mappings.json
