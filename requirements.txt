@@ -3,3 +3,5 @@ pandas
 click
 python-dotenv
 tabulate
+ruff
+pre-commit
