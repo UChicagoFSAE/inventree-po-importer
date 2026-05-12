@@ -11,6 +11,7 @@ class LineItem:
     quantity: float
     unit_price: float
     description: str
+    manufacturer: Optional[str] = None
     customer_reference: Optional[str] = None
 
     # Resolved data from InvenTree

@@ -1,2 +1,3 @@
 Index,DigiKey Part #,Manufacturer Part Number,Manufacturer,Description,Customer Reference,Quantity,Backorder,Unit Price,Extended Price
-52,DNE,THISDOESNTEXIST,Fake Company,Fake Part,Fake Reference,1,0,0.00 ,$0.00
+1,DNE1_ND,DNE1_MPN,Fake Company,Fake Part,Fake Reference,1,0,0.00,$0.00
+2,DNE2_ND,DNE2_MPN,Texas Instruments,Fake Part 2 with Real Manufacturer,Fake Reference 2,2,0,1.50,$3.00

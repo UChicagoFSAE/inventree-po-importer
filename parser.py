@@ -13,6 +13,7 @@ def parse_csv(filepath: str) -> List[LineItem]:
         "Index": "index",
         "DigiKey Part #": "sku",
         "Manufacturer Part Number": "mpn",
+        "Manufacturer": "manufacturer",
         "Quantity": "quantity",
         "Unit Price": "unit_price",
         "Description": "description",
@@ -30,6 +31,9 @@ def parse_csv(filepath: str) -> List[LineItem]:
                 index=int(row["Index"]),
                 sku=str(row["DigiKey Part #"]).strip(),
                 mpn=str(row["Manufacturer Part Number"]).strip(),
+                manufacturer=str(row["Manufacturer"]).strip()
+                if "Manufacturer" in row and pd.notna(row["Manufacturer"])
+                else None,
                 quantity=float(row["Quantity"]),
                 unit_price=float(str(row["Unit Price"]).replace("$", "").strip()),
                 description=str(row["Description"]).strip(),
