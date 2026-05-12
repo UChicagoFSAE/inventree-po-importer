@@ -221,3 +221,6 @@ __marimo__/
 
 # Example CSVs
 examples/DK*.csv
+
+# Handoff Documents
+.handoffs/
