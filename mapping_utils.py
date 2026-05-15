@@ -9,20 +9,33 @@ FIELD_ALIASES = {
     "index": ["Index", "#", "Line Item", "Line"],
     "sku": [
         "DigiKey Part #",
+        "Mouser #",
         "Supplier Part",
         "SKU",
         "Part Number",
         "Supplier Part Number",
     ],
-    "mpn": ["Manufacturer Part Number", "MPN", "Mfr Part #", "Mfr Part Number"],
-    "quantity": ["Quantity", "Qty", "Amount", "Quantity Shipped"],
-    "unit_price": ["Unit Price", "Price", "Cost", "Price Each"],
+    "mpn": [
+        "Manufacturer Part Number",
+        "Mfr. #",
+        "MPN",
+        "Mfr Part #",
+        "Mfr Part Number",
+    ],
+    "quantity": ["Quantity", "Qty", "Amount", "Quantity Shipped", "Order Qty."],
+    "unit_price": ["Unit Price", "Price", "Cost", "Price Each", "Price (USD)"],
     "description": ["Description", "Product Description", "Item Description"],
     "manufacturer": ["Manufacturer", "Mfr", "Make"],
-    "customer_reference": ["Customer Reference", "Ref", "PO Number", "Customer Ref"],
+    "customer_reference": [
+        "Customer Reference",
+        "Customer #",
+        "Ref",
+        "PO Number",
+        "Customer Ref",
+    ],
 }
 
-REQUIRED_FIELDS = ["index", "sku", "mpn", "quantity", "unit_price", "description"]
+REQUIRED_FIELDS = ["sku", "mpn", "quantity", "unit_price", "description"]
 
 
 def load_mappings() -> Dict:
@@ -47,10 +60,43 @@ def get_saved_mapping(supplier_id: str) -> Optional[Dict[str, str]]:
     return mappings.get(str(supplier_id))
 
 
+def find_csv_header(filepath: str) -> int:
+    """Finds the 0-based index of the header row in a CSV file."""
+    try:
+        # Read the first 20 lines to find the header
+        with open(filepath, "r") as f:
+            lines = [f.readline() for _ in range(20)]
+
+        # Flatten all aliases into a single set for fast lookup
+        all_aliases = {
+            alias.lower() for aliases in FIELD_ALIASES.values() for alias in aliases
+        }
+
+        best_row = 0
+        max_matches = -1
+
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+
+            # Simple heuristic: count how many aliases are in this row
+            parts = [p.strip().lower() for p in line.split(",")]
+            matches = sum(1 for p in parts if p in all_aliases)
+
+            if matches > max_matches:
+                max_matches = matches
+                best_row = i
+
+        return best_row
+    except Exception:
+        return 0
+
+
 def detect_columns(filepath: str) -> Dict[str, Optional[str]]:
     """Try to auto-detect CSV columns based on common aliases."""
+    header_row = find_csv_header(filepath)
     try:
-        df = pd.read_csv(filepath, nrows=0)
+        df = pd.read_csv(filepath, skiprows=header_row, nrows=0)
         headers = df.columns.tolist()
     except Exception:
         return {field: None for field in FIELD_ALIASES}

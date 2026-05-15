@@ -227,3 +227,4 @@ examples/DK*.csv
 
 # Local Settings
 supplier_mappings.json
+.digikey_token.json

@@ -1,20 +1,27 @@
 import pandas as pd
+import os
 from typing import List
 from models import LineItem
+from mapping_utils import find_csv_header
 
 
 def parse_csv(filepath: str, mapping: dict) -> List[LineItem]:
-    # Read CSV
-    df = pd.read_csv(filepath)
+    header_row = find_csv_header(filepath)
+    # Read CSV skipping leading junk
+    df = pd.read_csv(filepath, skiprows=header_row)
 
-    # Filter to only rows that have the core data (ignore Subtotal row)
-    # Use mapped columns for index, sku, and mpn if available for filtering
-    subset = [mapping[f] for f in ["index", "sku", "mpn"] if mapping.get(f)]
+    # Determine default student name from filename
+    filename = os.path.basename(filepath)
+    default_student_name = os.path.splitext(filename)[0]
+
+    # Filter to only rows that have the core data
+    # Use mapped columns for sku and mpn if available for filtering
+    subset = [mapping[f] for f in ["sku", "mpn"] if mapping.get(f)]
     if subset:
         df = df.dropna(subset=subset)
 
     line_items = []
-    for _, row in df.iterrows():
+    for i, row in df.iterrows():
         try:
             # Helper to get value from mapped column
             def get_val(field):
@@ -33,8 +40,19 @@ def parse_csv(filepath: str, mapping: dict) -> List[LineItem]:
                 .strip()
             )
 
+            customer_ref = (
+                str(get_val("customer_reference")).strip()
+                if get_val("customer_reference")
+                else None
+            )
+
+            # Use dataframe index if 'index' field is not mapped
+            idx_val = get_val("index")
+            if idx_val is None:
+                idx_val = i + 1
+
             item = LineItem(
-                index=int(get_val("index")),
+                index=int(idx_val),
                 sku=str(get_val("sku")).strip(),
                 mpn=str(get_val("mpn")).strip(),
                 manufacturer=str(get_val("manufacturer")).strip()
@@ -42,15 +60,14 @@ def parse_csv(filepath: str, mapping: dict) -> List[LineItem]:
                 else None,
                 quantity=float(get_val("quantity")),
                 unit_price=float(unit_price_clean),
-                description=str(get_val("description")).strip(),
-                customer_reference=str(get_val("customer_reference")).strip()
-                if get_val("customer_reference")
-                else None,
+                description=get_val("description"),
+                customer_reference=customer_ref,
+                student_name=default_student_name,
             )
             line_items.append(item)
         except (ValueError, TypeError) as e:
             idx_col = mapping.get("index")
-            idx_val = row.get(idx_col) if idx_col else "unknown"
+            idx_val = row.get(idx_col) if idx_col else i + 1
             print(f"Warning: Skipping row {idx_val} due to parsing error: {e}")
 
     return line_items

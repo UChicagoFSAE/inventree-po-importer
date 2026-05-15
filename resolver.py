@@ -1,13 +1,38 @@
 from typing import List, Dict, Optional
+import os
 from models import LineItem
 from inventree.company import SupplierPart, ManufacturerPart, Company
-from inventree.part import Part, PartCategory
+from inventree.part import Part, PartCategory, PartParameter
+from api_providers.base import BaseProvider
+from conventions import NamingConvention
 
 
 class Resolver:
     def __init__(self, api):
         self.api = api
         self.part_cache: Dict[int, Part] = {}
+        self.providers: List[BaseProvider] = self._load_providers()
+
+    def _load_providers(self) -> List[BaseProvider]:
+        """Loads available API providers based on environment variables."""
+        providers = []
+        # Mouser implementation
+        mouser_key = os.getenv("MOUSER_API_KEY")
+        if mouser_key:
+            mouser_key = mouser_key.strip()
+            from api_providers.mouser import MouserProvider
+
+            providers.append(MouserProvider(mouser_key))
+
+        # DigiKey implementation
+        dk_id = os.getenv("DIGIKEY_CLIENT_ID")
+        dk_secret = os.getenv("DIGIKEY_CLIENT_SECRET")
+        if dk_id and dk_secret:
+            from api_providers.digikey import DigiKeyProvider
+
+            providers.append(DigiKeyProvider(dk_id, dk_secret))
+
+        return providers
 
     def resolve_items(self, items: List[LineItem], supplier_id: int):
         """Enriches a list of LineItems with InvenTree PKs."""
@@ -38,6 +63,7 @@ class Resolver:
         category_pk: int,
         supplier_id: int,
         manufacturer_pk: Optional[int] = None,
+        parameters: Optional[Dict[str, str]] = None,
     ) -> int:
         """Create a new Part and associated linkage."""
         # 1. Create Base Part
@@ -51,7 +77,25 @@ class Resolver:
         if isinstance(new_part, list):
             new_part = new_part[0]
 
-        # 2. Link Manufacturer Part if manufacturer provided
+        # 2. Add Part Parameters if provided
+        if parameters:
+            # We first need to get the parameter templates for this category
+            # In a real implementation, we'd map our API keys to InvenTree templates
+            for key, value in parameters.items():
+                try:
+                    PartParameter.create(
+                        self.api,
+                        data={
+                            "part": new_part.pk,
+                            "template": key,  # InvenTree expects a template ID or name
+                            "data": value,
+                        },
+                    )
+                except Exception:
+                    # If template doesn't exist, we skip it for now
+                    pass
+
+        # 3. Link Manufacturer Part if manufacturer provided
         manufacturer_part_pk = None
         if manufacturer_pk:
             mp_data = {
@@ -103,6 +147,76 @@ class Resolver:
         item.part_description = getattr(p, "description", "N/A")
         item.internal_part_number = getattr(p, "IPN", "---")
 
+    def _fetch_external_parameters(self, mpn: str) -> Dict[str, str]:
+        """Queries available external providers for part parameters."""
+        for provider in self.providers:
+            params = provider.search_mpn(mpn)
+            if params:
+                return params
+        return {}
+
+    def resolve_by_parameters(self, item: LineItem) -> Optional[int]:
+        """Attempts to find a base part by matching fetched parameters to InvenTree."""
+        # 1. Fetch parameters if not already present
+        if not item.api_parameters:
+            item.api_parameters = self._fetch_external_parameters(item.mpn)
+
+        if not item.api_parameters:
+            return None
+
+        # 2. Fast-track check (e.g. Passives)
+        fast_track_keywords = ["CAP", "RES", "INDUCTOR", "SWITCH", "LED"]
+        description = (item.description or "").upper()
+        is_fast_track = any(kw in description for kw in fast_track_keywords)
+
+        if not is_fast_track:
+            # Queue for manual review instead of auto-resolving complex parts
+            item.resolution_status = "Pending Manual Review (Complex)"
+            return None
+
+        # 3. Parametric Search
+        # Try naming convention first
+        suggested_name = NamingConvention.suggest_name(item.api_parameters)
+        if suggested_name:
+            matches = self.search_parts(suggested_name, limit=1)
+            if matches:
+                return matches[0].pk
+
+        # Fallback to keyword search
+        # We look for the most identifying parameters (Capacitance/Resistance + Package)
+        # Using a broader list of keys to catch both Mouser and DigiKey variations
+        identifying_keys = [
+            "Capacitance",
+            "Resistance",
+            "Inductance",
+            "Package / Case",
+            "Package",
+            "Case Code - in",
+            "Case Code - mm",
+            "Case/Package",
+        ]
+        search_terms = []
+        for key in identifying_keys:
+            if key in item.api_parameters:
+                val = item.api_parameters[key]
+                # Clean up values: e.g. "0603 (1608 Metric)" -> "0603"
+                if "(" in val:
+                    val = val.split("(")[0].strip()
+                search_terms.append(val)
+
+        if not search_terms:
+            return None
+
+        # Perform a keyword search using the technical parameters
+        query = " ".join(search_terms)
+        potential_parts = self.search_parts(query, limit=5)
+
+        # If we find exactly one match, we auto-resolve it
+        if len(potential_parts) == 1:
+            return potential_parts[0].pk
+
+        return None
+
     def resolve_item(self, item: LineItem, supplier_id: int):
         # 1. Try SKU match (SupplierPart)
         try:
@@ -130,7 +244,21 @@ class Resolver:
                 # Note: supplier_part_pk remains None as it's not a direct supplier match
                 return
 
-            item.resolution_status = "Not Found"
+            # 3. Always attempt API fetch for metadata/parameters if not already present
+            if not item.api_parameters:
+                item.api_parameters = self._fetch_external_parameters(item.mpn)
+
+            # 4. Try Parameter Match (API Fallback) for fast-track items
+            part_pk = self.resolve_by_parameters(item)
+            if part_pk:
+                item.base_part_pk = part_pk
+                item.resolution_status = "Resolved (Parameters)"
+                self._fetch_part_metadata(item)
+                return
+
+            # Note: resolution_status might already be set to "Pending Manual Review (Complex)"
+            if item.resolution_status == "Pending":
+                item.resolution_status = "Not Found"
 
         except Exception as e:
             item.resolution_status = "Error"

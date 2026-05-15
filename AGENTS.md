@@ -7,22 +7,21 @@ This document provides context, architectural patterns, and project direction fo
 **InvenTree PO Importer** is a Python-based CLI tool designed to bridge the gap between supplier invoice CSVs (e.g., DigiKey) and an [InvenTree](https://inventree.org/) inventory instance.
 
 ### Current Features:
-- **Supplier Reconciliation:** Resolves CSV rows to InvenTree parts using a two-tier lookup:
+- **Supplier Reconciliation:** Resolves CSV rows to InvenTree parts using a three-tier lookup:
     1. **SKU Match:** Direct match via `SupplierPart`.
     2. **MPN Fallback:** Match via `ManufacturerPart` to trace the base part.
-- **Interactive Fallback:** If automated resolution fails, users can:
-    - Search InvenTree for similar parts.
-    - Manually link to a known Part ID or IPN.
-    - Create a new Part, Manufacturer, and associated links on-the-fly.
+    3. **Parameter Match:** Queries Mouser/DigiKey APIs for technical attributes and searches InvenTree for matching Base Parts (Fast-track for passives).
+- **Classroom Procurement Aggregator:** Process multiple student carts, calculate local stock allocations, and generate native InvenTree Purchase Orders (POs) for shortages.
+- **Interactive Fallback (TUI):** If automated resolution fails, users can search InvenTree or create new parts. API data is used to **pre-fill** creation forms (Name, Description, Mfr).
 - **Visual Verification (TUI):** Displays a color-coded comparison of CSV data vs. retrieved InvenTree metadata to ensure accuracy.
-- **Direct Stock Creation:** Bypasses the Purchase Order state machine to directly create `StockItem` objects in a specified location with quantity and pricing data.
-- **Detailed Audit Trail:** Provides a post-execution summary table with internal Primary Keys (PKs) for all created records.
+- **Direct Stock Creation:** Handles direct `StockItem` creation for validated invoices.
+- **Detailed Audit Trail:** Provides post-execution summary tables and CSV allocation reports.
 
 ## 2. Project Direction
 
 The project follows an iterative roadmap toward full supply chain automation:
 1. **Phase 1 (Complete):** Read-only reconciliation and metadata retrieval.
-2. **Phase 2 (Current):** Direct Stock creation and interactive part resolution.
+2. **Phase 2 (In-Progress):** Direct Stock creation, interactive part resolution, and Procurement Aggregation.
 3. **Phase 3 (Next):** Implement full **Purchase Order (PO) lifecycle** management (Create PO -> Add Lines -> Issue PO -> Receive PO) to maintain formal accounting records.
 4. **Phase 4:** Generic supplier mapping (Configurable CSV header maps for Mouser, LCSC, etc.).
 
@@ -31,9 +30,10 @@ The project follows an iterative roadmap toward full supply chain automation:
 ### Data Pipeline Architecture
 To prevent tight coupling between the CSV format and the InvenTree API, the project uses a **Modular Pipeline** pattern:
 - **`models.py`**: Central `LineItem` dataclass. Every stage of the pipeline must consume and/or enrich this object.
-- **`parser.py`**: Responsible for CSV-to-Dataclass mapping.
-- **`resolver.py`**: Handles lookups, search, and creation logic. Use `part_cache` to minimize redundant API calls.
+- **`parser.py`**: Responsible for CSV-to-Dataclass mapping. Handles student name extraction from filenames.
+- **`resolver.py`**: Handles lookups, search, and parameter-based resolution logic.
 - **`stock_manager.py`**: Handles state-mutating writes for stock items.
+- **`procurement_manager.py`**: New module for aggregating student carts, calculating allocations, and generating native POs.
 
 ### Technical Stack
 - **Python 3.10+**: Utilize type hinting and `dataclasses`.

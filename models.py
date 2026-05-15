@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict
 
 
 @dataclass
@@ -13,6 +13,8 @@ class LineItem:
     description: str
     manufacturer: Optional[str] = None
     customer_reference: Optional[str] = None
+    student_name: Optional[str] = None
+    api_parameters: Optional[Dict[str, str]] = None
 
     # Resolved data from InvenTree
     supplier_part_pk: Optional[int] = None

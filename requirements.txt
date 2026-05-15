@@ -3,5 +3,6 @@ pandas
 click
 python-dotenv
 tabulate
+requests
 ruff
 pre-commit
