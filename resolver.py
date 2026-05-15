@@ -64,7 +64,7 @@ class Resolver:
         supplier_id: int,
         manufacturer_pk: Optional[int] = None,
         parameters: Optional[Dict[str, str]] = None,
-    ) -> int:
+    ) -> Dict[str, int]:
         """Create a new Part and associated linkage."""
         # 1. Create Base Part
         part_data = {
@@ -79,50 +79,79 @@ class Resolver:
 
         # 2. Add Part Parameters if provided
         if parameters:
-            # We first need to get the parameter templates for this category
-            # In a real implementation, we'd map our API keys to InvenTree templates
             for key, value in parameters.items():
                 try:
                     PartParameter.create(
                         self.api,
                         data={
                             "part": new_part.pk,
-                            "template": key,  # InvenTree expects a template ID or name
+                            "template": key,
                             "data": value,
                         },
                     )
                 except Exception:
-                    # If template doesn't exist, we skip it for now
                     pass
 
-        # 3. Link Manufacturer Part if manufacturer provided
-        manufacturer_part_pk = None
-        if manufacturer_pk:
-            mp_data = {
-                "part": new_part.pk,
-                "manufacturer": manufacturer_pk,
-                "MPN": item.mpn,
-            }
-            new_mp = ManufacturerPart.create(self.api, data=mp_data)
-            if isinstance(new_mp, list):
-                new_mp = new_mp[0]
-            manufacturer_part_pk = new_mp.pk
+        # 3. Create Linkage
+        created = self.create_linkage(item, new_part.pk, supplier_id, manufacturer_pk)
+        created["part"] = new_part.pk
+        item.resolution_status = "Resolved (Created)"
 
-        # 3. Create Supplier Part
-        sp_data = {
-            "part": new_part.pk,
-            "supplier": supplier_id,
-            "SKU": item.sku,
-            "manufacturer_part": manufacturer_part_pk,
-        }
-        new_sp = SupplierPart.create(self.api, data=sp_data)
-        if isinstance(new_sp, list):
-            new_sp = new_sp[0]
+        return created
+
+    def create_linkage(
+        self,
+        item: LineItem,
+        part_pk: int,
+        supplier_id: int,
+        manufacturer_pk: Optional[int] = None,
+    ) -> Dict[str, int]:
+        """Creates ManufacturerPart and SupplierPart links for an existing base part."""
+        created = {}
+        # 1. Link Manufacturer Part if manufacturer provided
+        manufacturer_part_pk = None
+        if manufacturer_pk and item.mpn:
+            # Check if it already exists to avoid duplicates
+            existing_mps = ManufacturerPart.list(
+                self.api, part=part_pk, manufacturer=manufacturer_pk, MPN=item.mpn
+            )
+            if existing_mps:
+                manufacturer_part_pk = existing_mps[0].pk
+            else:
+                mp_data = {
+                    "part": part_pk,
+                    "manufacturer": manufacturer_pk,
+                    "MPN": item.mpn,
+                }
+                new_mp = ManufacturerPart.create(self.api, data=mp_data)
+                if isinstance(new_mp, list):
+                    new_mp = new_mp[0]
+                manufacturer_part_pk = new_mp.pk
+                created["manufacturer_part"] = manufacturer_part_pk
+
+        # 2. Create/Ensure Supplier Part
+        existing_sps = SupplierPart.list(
+            self.api, part=part_pk, supplier=supplier_id, SKU=item.sku
+        )
+        if existing_sps:
+            new_sp = existing_sps[0]
+        else:
+            sp_data = {
+                "part": part_pk,
+                "supplier": supplier_id,
+                "SKU": item.sku,
+                "manufacturer_part": manufacturer_part_pk,
+            }
+            new_sp = SupplierPart.create(self.api, data=sp_data)
+            if isinstance(new_sp, list):
+                new_sp = new_sp[0]
+            created["supplier_part"] = new_sp.pk
 
         # Store supplier_part_pk in item for stock creation
         item.supplier_part_pk = new_sp.pk
+        self.link_manual_part(item, part_pk, "Resolved (Link Created)")
 
-        return new_part.pk
+        return created
 
     def link_manual_part(
         self, item: LineItem, part_pk: int, status_message: str = "Resolved (Manual)"

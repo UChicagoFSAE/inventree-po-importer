@@ -219,12 +219,16 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Example CSVs
-examples/DK*.csv
+# Temp folder
+temp/
 
 # Handoff Documents
 .handoffs/
 
-# Local Settings
+# Supplier Mappings
 supplier_mappings.json
 .digikey_token.json
+
+# OS generated files
+.DS_Store
+Thumbs.db

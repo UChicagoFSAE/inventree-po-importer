@@ -190,11 +190,100 @@ def _print_verification_table(items_list):
     return resolved_count
 
 
+def _resolve_category(resolver):
+    """Helper to resolve a category PK via search."""
+    cat_input = click.prompt("Enter Category PK or search term")
+    if cat_input.isdigit():
+        return int(cat_input), False
+
+    cats = resolver.search_categories(cat_input)
+    if cats:
+        # Check for exact match
+        for c in cats:
+            if c.name.lower() == cat_input.lower():
+                click.secho(
+                    f"  Exact category match found: {c.name}. Auto-selecting...",
+                    fg="cyan",
+                )
+                return c.pk, True
+
+        for idx, c in enumerate(cats):
+            click.echo(f"  [{idx + 1}] {c.name} ({c.pathstring})")
+
+        cat_choice = click.prompt(
+            "Select [1-N] or [S]earch again", default="1", show_default=True
+        ).upper()
+
+        if cat_choice.isdigit() and 1 <= int(cat_choice) <= len(cats):
+            return cats[int(cat_choice) - 1].pk, False
+        else:
+            return _resolve_category(resolver)
+    else:
+        click.secho("No categories found.", fg="yellow")
+        return _resolve_category(resolver)
+
+
+def _resolve_manufacturer(resolver, default_name=None):
+    """Helper to resolve a manufacturer PK via search or creation."""
+    mfr_input = click.prompt(
+        "Enter Manufacturer Name/PK (leave blank to skip)",
+        default=default_name or "",
+        show_default=True if default_name else False,
+    )
+    if not mfr_input:
+        return None, False
+
+    if mfr_input.isdigit():
+        return int(mfr_input), False
+
+    mfrs = resolver.search_manufacturers(mfr_input)
+    if mfrs:
+        # Check for exact match
+        for m in mfrs:
+            if m.name.lower() == mfr_input.lower():
+                click.secho(
+                    f"  Exact manufacturer match found: {m.name}. Auto-selecting...",
+                    fg="cyan",
+                )
+                return m.pk, True
+
+        for idx, m in enumerate(mfrs):
+            click.echo(f"  [{idx + 1}] {m.name}")
+
+        mfr_choice = click.prompt(
+            "Select [1-N], [S]earch again, or [N]ew manufacturer",
+            default="1",
+            show_default=True,
+        ).upper()
+
+        if mfr_choice.isdigit() and 1 <= int(mfr_choice) <= len(mfrs):
+            return mfrs[int(mfr_choice) - 1].pk, False
+        elif mfr_choice == "N":
+            new_mfr = resolver.create_manufacturer(mfr_input)
+            return new_mfr.pk, False
+        else:
+            return _resolve_manufacturer(resolver, None)
+    else:
+        if click.confirm(
+            f"Manufacturer '{mfr_input}' not found. Create it?", default=True
+        ):
+            new_mfr = resolver.create_manufacturer(mfr_input)
+            return new_mfr.pk, False
+    return None, False
+
+
 def _manual_resolution_loop(unresolved, resolver, supplier_id):
-    """Interactive loop for manual part resolution."""
-    for i, item in enumerate(unresolved):
+    """Interactive loop for manual part resolution with history and undo."""
+    from inventree.company import SupplierPart, ManufacturerPart
+    from inventree.part import Part
+
+    i = 0
+    history = []
+
+    while i < len(unresolved):
+        item = unresolved[i]
         click.secho(
-            f"\n--- Manual Resolution ({i+1}/{len(unresolved)}) ---",
+            f"\n--- Manual Resolution ({i + 1}/{len(unresolved)}) ---",
             fg="cyan",
             bold=True,
         )
@@ -211,32 +300,7 @@ def _manual_resolution_loop(unresolved, resolver, supplier_id):
 
         # Use naming convention for the default search query and suggested part name
         suggested_name = NamingConvention.suggest_name(item.api_parameters or {})
-
-        if suggested_name:
-            query = suggested_name
-        else:
-            # Fallback to identifying parameters for a better initial search query
-            identifying_keys = [
-                "Capacitance",
-                "Resistance",
-                "Inductance",
-                "Package / Case",
-                "Case Code - in",
-                "Package",
-            ]
-            search_terms = []
-            if item.api_parameters:
-                for key in identifying_keys:
-                    if key in item.api_parameters:
-                        val = item.api_parameters[key]
-                        if "(" in val:
-                            val = val.split("(")[0].strip()
-                        search_terms.append(val)
-
-            if search_terms:
-                query = " ".join(search_terms)
-            else:
-                query = item.mpn or item.description
+        query = suggested_name or item.mpn or item.description
 
         while not resolved:
             # Auto-search or custom search
@@ -245,115 +309,101 @@ def _manual_resolution_loop(unresolved, resolver, supplier_id):
                 click.echo("\nSearch Results:")
                 for idx, p in enumerate(parts):
                     click.echo(
-                        f"  [{idx+1}] {p.name} (IPN: {getattr(p, 'IPN', '---')}) - {p.description[:50]}"
+                        f"  [{idx + 1}] {p.name} (IPN: {getattr(p, 'IPN', '---')}) - {p.description[:50]}"
                     )
+                default_choice = "1"
             else:
                 click.secho("No matching parts found in InvenTree.", fg="yellow")
+                default_choice = "S"
 
-            choice = click.prompt(
-                "\nSelect [1-5], [S]earch, [M]anual PK, [C]reate New, [X]kip",
-                type=str,
-                default="X",
-            ).upper()
+            prompt_text = "\nSelect [1-N], [S]earch, [M]anual PK, [C]reate New, [X]kip"
+            if history:
+                prompt_text += ", [U]ndo previous"
+
+            choice = click.prompt(prompt_text, type=str, default=default_choice).upper()
+
+            created_info = None
+            old_data = {
+                "base_part_pk": item.base_part_pk,
+                "supplier_part_pk": item.supplier_part_pk,
+                "resolution_status": item.resolution_status,
+                "part_name": item.part_name,
+                "part_description": item.part_description,
+                "internal_part_number": item.internal_part_number,
+            }
 
             if choice.isdigit() and 1 <= int(choice) <= len(parts):
                 selected_part = parts[int(choice) - 1]
-                resolver.link_manual_part(item, selected_part.pk)
+                if click.confirm(
+                    f"Permanently link SKU {item.sku} and MPN {item.mpn} to {selected_part.name}?"
+                ):
+                    default_mfr = (
+                        (item.api_parameters or {}).get("Manufacturer")
+                        or item.manufacturer
+                        or ""
+                    )
+                    mfr_pk, auto_mfr = _resolve_manufacturer(resolver, default_mfr)
+                    created_info = resolver.create_linkage(
+                        item, selected_part.pk, supplier_id, mfr_pk
+                    )
+                else:
+                    resolver.link_manual_part(item, selected_part.pk)
                 resolved = True
             elif choice == "S":
                 query = click.prompt("Enter search term")
             elif choice == "M":
                 pk_val = click.prompt("Enter InvenTree Part PK or IPN")
                 try:
+                    target_pk = None
                     if pk_val.isdigit():
-                        resolver.link_manual_part(item, int(pk_val))
-                        resolved = True
+                        target_pk = int(pk_val)
                     else:
                         ipn_parts = resolver.search_parts(pk_val)
                         if ipn_parts and getattr(ipn_parts[0], "IPN", "") == pk_val:
-                            resolver.link_manual_part(ipn_parts[0].pk)
-                            resolved = True
-                        else:
-                            click.secho(
-                                f"Could not find part with IPN {pk_val}", fg="red"
+                            target_pk = ipn_parts[0].pk
+
+                    if target_pk:
+                        if click.confirm(
+                            f"Permanently link SKU {item.sku} to PK {target_pk}?"
+                        ):
+                            default_mfr = (
+                                (item.api_parameters or {}).get("Manufacturer")
+                                or item.manufacturer
+                                or ""
                             )
+                            mfr_pk, auto_mfr = _resolve_manufacturer(
+                                resolver, default_mfr
+                            )
+                            created_info = resolver.create_linkage(
+                                item, target_pk, supplier_id, mfr_pk
+                            )
+                        else:
+                            resolver.link_manual_part(item, target_pk)
+                        resolved = True
                 except Exception as e:
                     click.secho(f"Error: {e}", fg="red")
             elif choice == "C":
-                # Use API parameters for pre-filling if available
                 api_params = item.api_parameters or {}
-
-                default_name = (
-                    suggested_name or api_params.get("MPN") or item.mpn or item.sku
+                name = click.prompt(
+                    "Part Name",
+                    default=suggested_name
+                    or api_params.get("MPN")
+                    or item.mpn
+                    or item.sku,
                 )
-                default_desc = api_params.get("Description") or item.description
-                default_mfr = api_params.get("Manufacturer") or item.manufacturer or ""
-
-                name = click.prompt("Part Name", default=default_name)
-                desc = click.prompt("Part Description", default=default_desc)
-
-                cat_resolved = False
-                cat_pk = None
-                while not cat_resolved:
-                    cat_input = click.prompt("Enter Category PK or search term")
-                    if cat_input.isdigit():
-                        cat_pk = int(cat_input)
-                        cat_resolved = True
-                    else:
-                        cats = resolver.search_categories(cat_input)
-                        if cats:
-                            for idx, c in enumerate(cats):
-                                click.echo(f"  [{idx+1}] {c.name} ({c.pathstring})")
-                            cat_choice = click.prompt(
-                                "Select [1-5] or [S]earch again", default="S"
-                            ).upper()
-                            if cat_choice.isdigit() and 1 <= int(cat_choice) <= len(
-                                cats
-                            ):
-                                cat_pk = cats[int(cat_choice) - 1].pk
-                                cat_resolved = True
-                        else:
-                            click.secho("No categories found.", fg="yellow")
-
-                mfr_pk = None
-                mfr_input = click.prompt(
-                    "Enter Manufacturer Name/PK (leave blank to skip)",
-                    default=default_mfr,
-                    show_default=True if default_mfr else False,
+                desc = click.prompt(
+                    "Part Description",
+                    default=api_params.get("Description") or item.description,
                 )
-                if mfr_input:
-                    if mfr_input.isdigit():
-                        mfr_pk = int(mfr_input)
-                    else:
-                        mfrs = resolver.search_manufacturers(mfr_input)
-                        if mfrs:
-                            for idx, m in enumerate(mfrs):
-                                click.echo(f"  [{idx+1}] {m.name}")
-                            mfr_choice = click.prompt(
-                                "Select [1-5], [S]earch again, or [N]ew manufacturer",
-                                default="N",
-                            ).upper()
-                            if mfr_choice.isdigit() and 1 <= int(mfr_choice) <= len(
-                                mfrs
-                            ):
-                                mfr_pk = mfrs[int(mfr_choice) - 1].pk
-                            elif mfr_choice == "N":
-                                new_mfr = resolver.create_manufacturer(mfr_input)
-                                mfr_pk = new_mfr.pk
-                        else:
-                            if click.confirm(
-                                f"Manufacturer '{mfr_input}' not found. Create it?"
-                            ):
-                                new_mfr = resolver.create_manufacturer(mfr_input)
-                                mfr_pk = new_mfr.pk
-
+                cat_pk, auto_cat = _resolve_category(resolver)
+                mfr_pk, auto_mfr = _resolve_manufacturer(
+                    resolver, api_params.get("Manufacturer") or item.manufacturer or ""
+                )
                 try:
-                    # Extract technical parameters for the new part
                     creation_params = NamingConvention.get_category_parameters(
                         api_params
                     )
-
-                    new_part_pk = resolver.create_new_part(
+                    created_info = resolver.create_new_part(
                         item,
                         name,
                         desc,
@@ -362,13 +412,90 @@ def _manual_resolution_loop(unresolved, resolver, supplier_id):
                         mfr_pk,
                         parameters=creation_params,
                     )
-                    resolver.link_manual_part(item, new_part_pk, "Resolved (Created)")
                     resolved = True
                 except Exception as e:
                     click.secho(f"Error creating part: {e}", fg="red")
+            elif choice == "U" and history:
+                # Undo last action
+                last = history.pop()
+                last_item = last["item"]
+                created = last["created"]
 
+                click.echo(f"Undoing resolution for {last_item.sku}...")
+
+                # Deletion from InvenTree
+                if created:
+                    if "supplier_part" in created:
+                        try:
+                            SupplierPart(
+                                resolver.api, pk=created["supplier_part"]
+                            ).delete()
+                        except Exception:
+                            pass
+                    if "manufacturer_part" in created:
+                        try:
+                            ManufacturerPart(
+                                resolver.api, pk=created["manufacturer_part"]
+                            ).delete()
+                        except Exception:
+                            pass
+                    if "part" in created:
+                        try:
+                            Part(resolver.api, pk=created["part"]).delete()
+                        except Exception:
+                            pass
+
+                # Revert item state
+                for key, val in last["old_data"].items():
+                    setattr(last_item, key, val)
+
+                i -= 1  # Step back
+                resolved = True  # Exit current loop to re-process previous item
+                continue
             elif choice == "X":
                 resolved = True
+
+        if choice != "U":
+            history.append(
+                {"item": item, "created": created_info, "old_data": old_data}
+            )
+            i += 1
+
+    # Final check if last item was auto-selected and no next prompt exists
+    # Actually the loop already finished, history has all actions.
+    # If the user wants to undo the very last one, they can only do it if we are still in the loop.
+    # But wait, if they finish the last item, they might want one last chance to undo.
+    if history and click.confirm(
+        "\nAll items processed. Undo manufacturer auto-created part?", default=False
+    ):
+        # We need to run the undo logic one more time.
+        # This is slightly redundant but satisfies the "directly offer to undo" for the last item.
+        last = history.pop()
+        last_item = last["item"]
+        created = last["created"]
+        click.echo(f"Undoing resolution for {last_item.sku}...")
+        if created:
+            if "supplier_part" in created:
+                try:
+                    SupplierPart(resolver.api, pk=created["supplier_part"]).delete()
+                except Exception:
+                    pass
+            if "manufacturer_part" in created:
+                try:
+                    ManufacturerPart(
+                        resolver.api, pk=created["manufacturer_part"]
+                    ).delete()
+                except Exception:
+                    pass
+            if "part" in created:
+                try:
+                    Part(resolver.api, pk=created["part"]).delete()
+                except Exception:
+                    pass
+        for key, val in last["old_data"].items():
+            setattr(last_item, key, val)
+        # Re-run for the last item
+        _manual_resolution_loop([last_item], resolver, supplier_id)
 
 
 def _run_importer(input_csv, supplier_id, location_id=None, items_list=None):
@@ -410,7 +537,7 @@ def _run_importer(input_csv, supplier_id, location_id=None, items_list=None):
                     default=not current and field in REQUIRED_FIELDS,
                 ):
                     for idx, h in enumerate(csv_headers):
-                        click.echo(f"  [{idx+1}] {h}")
+                        click.echo(f"  [{idx + 1}] {h}")
                     choice = click.prompt(
                         "Select column [1-N] or [0] to leave unmapped",
                         type=int,
