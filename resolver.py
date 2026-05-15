@@ -3,6 +3,7 @@ import os
 from models import LineItem
 from inventree.company import SupplierPart, ManufacturerPart, Company
 from inventree.part import Part, PartCategory, PartParameter
+from inventree.stock import StockLocation
 from api_providers.base import BaseProvider
 from conventions import NamingConvention
 
@@ -50,6 +51,14 @@ class Resolver:
     def search_manufacturers(self, query: str, limit: int = 5) -> List[Company]:
         """Search for companies that are manufacturers."""
         return Company.list(self.api, search=query, is_manufacturer=True, limit=limit)
+
+    def search_suppliers(self, query: str, limit: int = 10) -> List[Company]:
+        """Search for companies that are suppliers."""
+        return Company.list(self.api, search=query, is_supplier=True, limit=limit)
+
+    def search_locations(self, query: str, limit: int = 10) -> List[StockLocation]:
+        """Search for stock locations in InvenTree."""
+        return StockLocation.list(self.api, search=query, limit=limit)
 
     def create_manufacturer(self, name: str) -> Company:
         """Create a new manufacturer company."""

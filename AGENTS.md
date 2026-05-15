@@ -59,3 +59,4 @@ When resolving or creating parts, ensure the following fields are captured:
 1. **Research:** Check `models.py` when adding new data fields and `resolver.py` for API interaction patterns.
 2. **Strategy:** Maintain the separation between *Resolution* (lookup/link) and *Action* (writing stock changes).
 3. **Verification:** Verify against the provided sample CSV in `./examples/` or specified in the prompt.
+4. **Linting and Formatting** We utilize Ruff as the linter and formatter. Please run Ruff when you make changes.

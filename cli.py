@@ -27,7 +27,7 @@ def cli():
 @click.argument("input_csvs", type=click.Path(exists=True), nargs=-1)
 @click.option(
     "--supplier-id",
-    required=True,
+    required=False,
     type=int,
     help="InvenTree ID for the supplier to create the PO for (e.g. Mouser)",
 )
@@ -48,6 +48,9 @@ def process_carts(input_csvs, supplier_id, output):
     except Exception as e:
         click.secho(f"Error: Could not connect to InvenTree API: {e}", fg="red")
         return
+
+    if not supplier_id:
+        supplier_id = _select_supplier(api)
 
     all_items = []
     for csv_file in input_csvs:
@@ -124,19 +127,31 @@ def process_carts(input_csvs, supplier_id, output):
 @click.argument("input_csv", type=click.Path(exists=True))
 @click.option(
     "--supplier-id",
-    required=True,
+    required=False,
     type=int,
     help="InvenTree ID for the supplier (e.g. DigiKey)",
 )
 @click.option(
     "--location-id",
-    required=True,
+    required=False,
     type=int,
     help="InvenTree ID for the destination stock location",
 )
 def import_invoice(input_csv, supplier_id, location_id):
     """Reconcile a supplier CSV and import stock into InvenTree."""
-    _run_importer(input_csv, supplier_id, location_id)
+    click.echo("Connecting to InvenTree...")
+    try:
+        api = get_api()
+    except Exception as e:
+        click.secho(f"Error: Could not connect to InvenTree API: {e}", fg="red")
+        return
+
+    if not supplier_id:
+        supplier_id = _select_supplier(api)
+    if not location_id:
+        location_id = _select_location(api)
+
+    _run_importer(input_csv, supplier_id, location_id, api=api)
 
 
 def _print_verification_table(items_list):
@@ -498,13 +513,14 @@ def _manual_resolution_loop(unresolved, resolver, supplier_id):
         _manual_resolution_loop([last_item], resolver, supplier_id)
 
 
-def _run_importer(input_csv, supplier_id, location_id=None, items_list=None):
-    click.echo("Connecting to InvenTree...")
-    try:
-        api = get_api()
-    except Exception as e:
-        click.secho(f"Error: Could not connect to InvenTree API: {e}", fg="red")
-        return
+def _run_importer(input_csv, supplier_id, location_id=None, items_list=None, api=None):
+    if not api:
+        click.echo("Connecting to InvenTree...")
+        try:
+            api = get_api()
+        except Exception as e:
+            click.secho(f"Error: Could not connect to InvenTree API: {e}", fg="red")
+            return
 
     # Resolve CSV mapping
     mapping = get_saved_mapping(supplier_id)
@@ -655,6 +671,110 @@ def _run_importer(input_csv, supplier_id, location_id=None, items_list=None):
             )
     else:
         click.echo("Stock creation cancelled.")
+
+
+def _select_supplier(api):
+    """Interactively select a supplier."""
+    from resolver import Resolver
+
+    resolver = Resolver(api)
+
+    while True:
+        query = click.prompt("\nSearch for Supplier (name or ID, [X] to abort)")
+        if query.upper() == "X":
+            raise click.Abort()
+
+        if query.isdigit():
+            # Verify ID exists
+            try:
+                from inventree.company import Company
+
+                supplier = Company(api, pk=int(query))
+                if supplier.is_supplier:
+                    return supplier.pk
+                else:
+                    click.secho(f"Company {query} is not a supplier.", fg="yellow")
+            except Exception:
+                click.secho(f"Supplier ID {query} not found.", fg="red")
+
+        suppliers = resolver.search_suppliers(query)
+        if not suppliers:
+            click.secho(f"No suppliers found matching '{query}'", fg="yellow")
+            continue
+
+        if len(suppliers) == 1:
+            click.secho(
+                f"Found supplier: {suppliers[0].name} (ID: {suppliers[0].pk})",
+                fg="cyan",
+            )
+            return suppliers[0].pk
+        else:
+            click.echo("\nMultiple suppliers found:")
+            for i, s in enumerate(suppliers):
+                desc = getattr(s, "description", "No description")
+                click.echo(f"  [{i + 1}] {s.name} (ID: {s.pk}) - {desc[:50]}")
+
+            choice = click.prompt(
+                "Select supplier index [1-N], [0] to search again, or [X] to abort",
+                default="1",
+            ).upper()
+
+            if choice == "X":
+                raise click.Abort()
+            if choice.isdigit():
+                idx = int(choice)
+                if 1 <= idx <= len(suppliers):
+                    return suppliers[idx - 1].pk
+
+
+def _select_location(api):
+    """Interactively select a stock location."""
+    from resolver import Resolver
+
+    resolver = Resolver(api)
+
+    while True:
+        query = click.prompt("\nSearch for Stock Location (name or ID, [X] to abort)")
+        if query.upper() == "X":
+            raise click.Abort()
+
+        if query.isdigit():
+            try:
+                from inventree.stock import StockLocation
+
+                loc = StockLocation(api, pk=int(query))
+                return loc.pk
+            except Exception:
+                click.secho(f"Location ID {query} not found.", fg="red")
+
+        locations = resolver.search_locations(query)
+        if not locations:
+            click.secho(f"No locations found matching '{query}'", fg="yellow")
+            continue
+
+        if len(locations) == 1:
+            click.secho(
+                f"Found location: {locations[0].name} (ID: {locations[0].pk})",
+                fg="cyan",
+            )
+            return locations[0].pk
+        else:
+            click.echo("\nMultiple locations found:")
+            for i, loc in enumerate(locations):
+                desc = getattr(loc, "description", "No description")
+                click.echo(f"  [{i + 1}] {loc.name} (ID: {loc.pk}) - {desc[:50]}")
+
+            choice = click.prompt(
+                "Select location index [1-N], [0] to search again, or [X] to abort",
+                default="1",
+            ).upper()
+
+            if choice == "X":
+                raise click.Abort()
+            if choice.isdigit():
+                idx = int(choice)
+                if 1 <= idx <= len(locations):
+                    return locations[idx - 1].pk
 
 
 if __name__ == "__main__":
